@@ -6,5 +6,5 @@ export { validateFrame, badMetaKeys } from "./protocol/frame.js";
 export type { Delivery } from "./protocol/delivery.js";
 export { delivered } from "./protocol/delivery.js";
 export { CHANNEL_METHOD, CHANNEL_CAPABILITY } from "./protocol/method.js";
-export { legacyStdioDiscoveryResponse } from "./protocol/discovery.js";
+export { legacyStdioDiscoveryResponse, legacyStdioRelayAction, type LegacyStdioRelayAction } from "./protocol/discovery.js";
 export { z } from "zod";

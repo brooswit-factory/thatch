@@ -63,14 +63,16 @@ Pushing into a session can fail in ways the MCP SDK hides: a connection can be r
 For a stdio-to-HTTP relay, call the shared helper before forwarding a request:
 
 ```ts
-import { legacyStdioDiscoveryResponse } from "@brooswit/thatch";
+import { legacyStdioRelayAction } from "@brooswit/thatch";
 
-const response = legacyStdioDiscoveryResponse(message);
-if (response) await stdio.send(response);
-else await http.send(message);
+const action = legacyStdioRelayAction(message, !!http.sessionId);
+if (action.type === "reply") await stdio.send(action.message);
+else if (action.type === "forward") await http.send(message);
 ```
 
-The helper returns an error response only for a valid `server/discover` request, preserving its ID. Other messages return `undefined`. It creates no session and advertises no modern capabilities. Handle this at the stdio boundary: HTTP initialization guards may reject a forwarded probe before it reaches Thatch. The HTTP plugin and its initialization rules are unchanged.
+The helper replies only to valid `server/discover` requests, preserving their IDs. It ignores `notifications/roots/list_changed` before an HTTP session exists: fresh agy startup emits this early, when no server session state needs invalidation. Once there is a session it forwards that notification normally. All other messages are forwarded. The lower-level `legacyStdioDiscoveryResponse(message)` remains available for discovery alone (response or `undefined`).
+
+Neither helper creates a session, queues messages, or advertises modern capabilities. Handle this at the stdio boundary: HTTP initialization guards may reject sessionless messages before they reach Thatch. The HTTP plugin and its initialization rules are unchanged.
 
 See the [MCP discovery specification](https://modelcontextprotocol.io/specification/2026-07-28/server/discover) and [stdio backward compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports).
 
