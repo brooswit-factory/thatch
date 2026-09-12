@@ -56,6 +56,24 @@ Pushing into a session can fail in ways the MCP SDK hides: a connection can be r
 - A `Connection` carries `id`, `headers` (all of them), `connectedAt`, and methods `send(frame)` / `close()`. No built-in history, `lastSeenAt`, or readiness flag — subscribe to the `send` event and key it however you like; the `send` result tells you if a frame could not land.
 - `import { FakeConnection } from "@brooswit/thatch/testing"` for tests.
 
+## Legacy stdio discovery fallback
+
+`server/discover` is standardized in MCP 2026-07-28. Newer stdio clients probe it before the legacy `initialize` handshake and fall back when they receive JSON-RPC `-32601`. Thatch uses the legacy sessionful HTTP lifecycle; it does not claim modern stateless protocol support.
+
+For a stdio-to-HTTP relay, call the shared helper before forwarding a request:
+
+```ts
+import { legacyStdioDiscoveryResponse } from "@brooswit/thatch";
+
+const response = legacyStdioDiscoveryResponse(message);
+if (response) await stdio.send(response);
+else await http.send(message);
+```
+
+The helper returns an error response only for a valid `server/discover` request, preserving its ID. Other messages return `undefined`. It creates no session and advertises no modern capabilities. Handle this at the stdio boundary: HTTP initialization guards may reject a forwarded probe before it reaches Thatch. The HTTP plugin and its initialization rules are unchanged.
+
+See the [MCP discovery specification](https://modelcontextprotocol.io/specification/2026-07-28/server/discover) and [stdio backward compatibility](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports).
+
 ## Layers
 
 `protocol` (frame, delivery, method — pure) · `registry` (named connections + history) · `channel` (sending, honest claims) · `plugin` (the Elysia mount, one MCP server per connection) · `testing`.

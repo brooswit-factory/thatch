@@ -10,6 +10,10 @@ CI refuses a merge that changes `src/`, `schema/` or `package.json` without a ne
 - **MINOR** — a new feature, or a change to an existing feature that breaks just that feature.
 - **PATCH** — a fix or correction that requires no consumer code changes, or very minor ones.
 
+## [0.6.2] - 2026-09-11
+### Fixed
+- Export `legacyStdioDiscoveryResponse` for relays to answer the standardized `server/discover` probe with legacy `-32601` fallback before forwarding to a sessionful HTTP endpoint. This avoids closing newer stdio clients before `initialize`; it does not implement the 2026-07-28 stateless protocol or change the HTTP plugin's lifecycle.
+
 ## [0.6.1] - 2026-08-26
 ### Changed
 - Repository moved to the brooswit-factory org; package.json repository/homepage/bugs URLs updated (npm provenance verifies repository.url against the building repo).
