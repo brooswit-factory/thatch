@@ -70,7 +70,7 @@ function build(o: McpOptions) {
     const headers: Record<string, string> = {};
     req.headers.forEach((v, k) => { headers[k] = v; });
     const session = await Session.open({
-      serverInfo, tools: o.tools ?? {}, sessionId: id,
+      serverInfo, instructions: o.instructions, tools: o.tools ?? {}, sessionId: id,
       connection: () => registry.get(id)!,
       onClose: () => { void closeById(id); },
     });

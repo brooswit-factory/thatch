@@ -29,12 +29,16 @@ export class Session implements Pushable {
 
   static async open(opts: {
     serverInfo: { name: string; version: string };
+    instructions?: string | undefined;
     tools: Record<string, ToolDef<any>>;
     connection: () => Connection;
     sessionId: string;
     onClose: () => void;
   }): Promise<Session> {
-    const server = new McpServer(opts.serverInfo, { capabilities: { ...CHANNEL_CAPABILITY, tools: {} } });
+    const server = new McpServer(opts.serverInfo, {
+      capabilities: { ...CHANNEL_CAPABILITY, tools: {} },
+      ...(opts.instructions ? { instructions: opts.instructions } : {}),
+    });
     for (const [name, def] of Object.entries(opts.tools)) {
       server.tool(name, def.description, def.input, async (args: unknown) => {
         const out = await def.handler(args as never, opts.connection());
