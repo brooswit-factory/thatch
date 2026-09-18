@@ -10,6 +10,13 @@ CI refuses a merge that changes `src/`, `schema/` or `package.json` without a ne
 - **MINOR** — a new feature, or a change to an existing feature that breaks just that feature.
 - **PATCH** — a fix or correction that requires no consumer code changes, or very minor ones.
 
+## [0.7.0] - 2026-09-18
+### Added
+- Stale-session reaping, on by default. A client whose process dies sends no DELETE, so its transport never closed and its connection stayed registered forever, refusing every push with `no-channel-stream`. thatch now closes such a session and emits `disconnect` with the new reason `"stale"`. That happens once its notification stream has been down for `detachGraceMs` (default 60s) with no request since, or once a session that never opened a stream has been silent for `idleMs` (default 10 min). An open stream or an in-flight request, including a streamed tool response, keeps a session alive. A reaped client that returns gets 404 and re-initializes. Configure it with `thatch({ reap: { detachGraceMs, idleMs, intervalMs } })`, or disable it with `reap: false`. New type export: `ReapOptions`.
+
+### Changed
+- `DisconnectReason` gains `"stale"`. A consumer that switches exhaustively on it needs the new case.
+
 ## [0.6.3] - 2026-09-11
 ### Fixed
 - Export `legacyStdioRelayAction` to combine discovery fallback with ignoring `notifications/roots/list_changed` before the HTTP session exists. Fresh agy startup emits this notification before `initialize`; relaying it closes a sessionful transport. Other messages and roots notifications after session creation remain forwarded. No queue, session ownership, or stateless protocol support is added.

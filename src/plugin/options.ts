@@ -21,4 +21,21 @@ export interface McpOptions {
   tools?: Record<string, ToolDef<any>>;
   /** Reported to clients at initialize. */
   serverInfo?: { name: string; version: string };
+  /**
+   * Close sessions whose client went away without saying so (a killed process sends no
+   * DELETE, so the transport never closes). A reaped session emits `disconnect` with
+   * reason `"stale"`; if its client does come back, it gets 404 and re-initializes.
+   * `false` disables reaping. Any request, or an attached notification stream, keeps a
+   * session alive.
+   */
+  reap?: false | ReapOptions;
+}
+
+export interface ReapOptions {
+  /** How long after its notification stream drops, with no request since, a session is stale. Default 60s. */
+  detachGraceMs?: number;
+  /** How long a session with no stream and no requests may sit before it is stale. Default 10 min. */
+  idleMs?: number;
+  /** How often to check. Default 15s. */
+  intervalMs?: number;
 }

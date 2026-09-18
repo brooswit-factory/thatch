@@ -4,7 +4,7 @@ import { Sender, type Pushable } from "../channel/sender.js";
 import type { Connection, DisconnectReason } from "../registry/connection.js";
 import type { Frame } from "../protocol/frame.js";
 import type { Delivery } from "../protocol/delivery.js";
-import type { McpOptions } from "./options.js";
+import type { McpOptions, ReapOptions } from "./options.js";
 import { Session } from "./session.js";
 
 const SESSION_HEADER = "mcp-session-id";
@@ -36,7 +36,26 @@ function build(o: McpOptions) {
   const sessions = new Map<string, Session>(); // id → session
   const serverInfo = o.serverInfo ?? { name: "thatch", version: "0" };
 
-  const closeById = async (id: string) => { const s = sessions.get(id); if (s) { sessions.delete(id); registry.remove(id, "closed"); await s.close(); } };
+  const closeById = async (id: string, reason: DisconnectReason = "closed") => {
+    const s = sessions.get(id);
+    if (s) { sessions.delete(id); registry.remove(id, reason); await s.close(); }
+    if (!sessions.size) stopSweep();
+  };
+
+  // Stale-session reaping: runs only while there are sessions, and never holds the process open.
+  const reap: Required<ReapOptions> | undefined = o.reap === false ? undefined
+    : { detachGraceMs: 60_000, idleMs: 600_000, intervalMs: 15_000, ...(o.reap ?? {}) };
+  let sweep: ReturnType<typeof setInterval> | undefined;
+  const sweepOnce = async () => {
+    const now = Date.now();
+    for (const [id, s] of [...sessions]) if (s.isStale(now, reap!.detachGraceMs, reap!.idleMs)) await closeById(id, "stale");
+  };
+  const startSweep = () => {
+    if (!reap || sweep) return;
+    sweep = setInterval(() => { void sweepOnce(); }, reap.intervalMs);
+    (sweep as { unref?: () => void }).unref?.();
+  };
+  function stopSweep() { if (sweep) { clearInterval(sweep); sweep = undefined; } }
 
   async function fetchHandler(req: Request): Promise<Response> {
     const sid = req.headers.get(SESSION_HEADER);
@@ -63,6 +82,7 @@ function build(o: McpOptions) {
       };
     });
     sessions.set(id, session);
+    startSweep();
     return session.handle(req);
   }
 
