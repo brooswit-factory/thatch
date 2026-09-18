@@ -131,3 +131,82 @@ describe("thatch auth hook", () => {
     await ok.disconnect(); await mcp.closeAll(); app.stop();
   });
 });
+
+describe("stale-session reaping", () => {
+  const fast = { reap: { detachGraceMs: 100, idleMs: 400, intervalMs: 10 } } as const;
+  // "is reaped" waits for it (a loaded box can lag the sweep); "not yet" checks run well inside the window
+  const until = async (cond: () => boolean, ms = 3000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await Bun.sleep(10); return cond(); };
+  const init = (base: string) => fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "p", version: "0" } } }),
+  }).then((r) => r.text());
+
+  test("a client that dies with its stream open (no DELETE) is reaped as stale after the grace", async () => {
+    const { mcp, base, stop } = fresh(fast);
+    const reasons: string[] = [];
+    mcp.on("disconnect", (_c, r) => reasons.push(r));
+    const a = await ready(mcp, base);
+    const id = a.sessionId!;
+    await a.client.close();                       // process killed: stream drops, no terminateSession
+    await Bun.sleep(20);
+    expect(mcp.connections.has(id)).toBe(true);   // still inside the grace
+    expect(await until(() => !mcp.connections.has(id))).toBe(true);
+    expect(reasons).toEqual(["stale"]);
+    expect(await mcp.send(id, { content: "x", meta: {} })).toEqual({ claim: "refused", reason: "not-connected" });
+    await stop();
+  });
+
+  test("a session that never opens a stream is reaped after the idle TTL, not before", async () => {
+    const { mcp, base, stop } = fresh(fast);
+    await init(base);
+    expect(mcp.connections.count()).toBe(1);
+    await Bun.sleep(200);
+    expect(mcp.connections.count()).toBe(1);      // past the detach grace, but it never attached: idle TTL applies
+    expect(await until(() => mcp.connections.count() === 0)).toBe(true);
+    await stop();
+  });
+
+  test("a live client with its stream attached is never reaped, and requests keep a streamless one alive", async () => {
+    const { mcp, base, stop } = fresh(fast);
+    const a = await ready(mcp, base);
+    await Bun.sleep(600);
+    expect(mcp.connections.has(a.sessionId!)).toBe(true);
+    expect(await mcp.send(a.sessionId!, { content: "still here", meta: {} })).toEqual({ claim: "C2" });
+    expect(await a.nextFrame()).toMatchObject({ content: "still here" });
+    await init(base);
+    const b = mcp.connections.list().find((c) => c.id !== a.sessionId!)!;
+    const call = (n: number) => fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-session-id": b.id, "mcp-protocol-version": "2025-03-26" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: n, method: "tools/list", params: {} }),
+    }).then((r) => r.text());
+    for (let i = 0; i < 12; i++) { await call(10 + i); await Bun.sleep(50); }   // 600ms total, well past idleMs
+    expect(mcp.connections.has(b.id)).toBe(true);
+    await a.disconnect(); await stop();
+  });
+
+  test("a reaped client's next request gets 404 (the MCP signal to re-initialize)", async () => {
+    const { mcp, base, stop } = fresh(fast);
+    const a = await ready(mcp, base);
+    const id = a.sessionId!;
+    await a.client.close();
+    expect(await until(() => !mcp.connections.has(id))).toBe(true);
+    const r = await fetch(`${base}/mcp`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-session-id": id },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+    });
+    expect(r.status).toBe(404);
+    await stop();
+  });
+
+  test("reap: false keeps a dead client's session registered", async () => {
+    const { mcp, base, stop } = fresh({ reap: false });
+    const a = await ready(mcp, base);
+    await a.client.close();
+    await Bun.sleep(300);                         // well past the grace the tests above reap within
+    expect(mcp.connections.has(a.sessionId!)).toBe(true);
+    await stop();
+  });
+});

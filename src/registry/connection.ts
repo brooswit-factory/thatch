@@ -17,4 +17,5 @@ export interface Connection {
   close(): Promise<void>;
 }
 
-export type DisconnectReason = "closed" | "error";
+/** `stale`: the client went away without closing, and thatch reaped the session (see `McpOptions.reap`). */
+export type DisconnectReason = "closed" | "error" | "stale";
