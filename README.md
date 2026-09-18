@@ -50,6 +50,7 @@ Pushing into a session can fail in ways the MCP SDK hides: a connection can be r
 ## API
 
 - `thatch({ tools?, auth?, path?, history?, serverInfo? })` → `{ plugin, mcp }`. Every client is accepted and assigned a UUID. Gate connections with `auth(req) => boolean` (default accepts all); it does not identify — an accepted client still gets a UUID and holds its headers.
+- `instructions` (optional string) is returned to every client at initialize as MCP server instructions. Claude Code adds it to the model's context, so behaviour every caller should follow (for example, how to reply in chat) goes here once, not in each agent's setup.
 - `mcp.connections`: `list()`, `get(id)`, `has(id)`, `count()`, `find(pred)`, `filter(pred)`.
 - `mcp.send(id, frame)`, `mcp.sendMany(ids, frame)`, `mcp.sendAll(frame, { where? })`.
 - `mcp.on/once/off` for `connect` / `disconnect`. The disconnect reason is `closed`, `error`, or `stale`.

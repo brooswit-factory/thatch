@@ -22,6 +22,12 @@ export interface McpOptions {
   /** Reported to clients at initialize. */
   serverInfo?: { name: string; version: string };
   /**
+   * Server instructions, returned to every client at initialize (MCP `instructions`).
+   * Clients such as Claude Code add them to the model's context, so behaviour every
+   * caller should follow belongs here rather than in each agent's own setup.
+   */
+  instructions?: string;
+  /**
    * Close sessions whose client went away without saying so (a killed process sends no
    * DELETE, so the transport never closes). A reaped session emits `disconnect` with
    * reason `"stale"`; if its client does come back, it gets 404 and re-initializes.

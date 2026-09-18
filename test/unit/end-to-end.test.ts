@@ -37,6 +37,17 @@ describe("thatch (uuid connections) end to end over real HTTP", () => {
     await a.disconnect(); await stop();
   });
 
+  test("server instructions reach the client at initialize, and are absent unless set", async () => {
+    const withText = fresh({ instructions: "Reply inside the message's thread." });
+    const a = await FakeConnection.connect(withText.base);
+    expect(a.client.getInstructions()).toBe("Reply inside the message's thread.");
+    await a.disconnect(); await withText.stop();
+    const plain = fresh();
+    const b = await FakeConnection.connect(plain.base);
+    expect(b.client.getInstructions()).toBeUndefined();
+    await b.disconnect(); await plain.stop();
+  });
+
   test("find/filter by header; send by id and c.send both land; sendAll honours where", async () => {
     const { mcp, base, stop } = fresh();
     const a = await ready(mcp, base, { "x-role": "supervisor" });
