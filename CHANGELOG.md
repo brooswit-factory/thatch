@@ -10,6 +10,10 @@ CI refuses a merge that changes `src/`, `schema/` or `package.json` without a ne
 - **MINOR** — a new feature, or a change to an existing feature that breaks just that feature.
 - **PATCH** — a fix or correction that requires no consumer code changes, or very minor ones.
 
+## [0.9.0] - 2026-09-18
+### Added
+- `thatch({ resurrectSessions: true })` (LIBS-7): opt-in server-side session resurrection. Off by default, a request carrying an `mcp-session-id` thatch doesn't recognize — e.g. every id after a restart — gets 404, forcing the client through a full re-`initialize` before its next request succeeds, and its background notification stream stays dead until then. With it on, such a request instead re-creates the session under that same id: the `auth` hook re-runs against the NEW request (a rejection still answers 401, and never resurrects), and the resurrected connection's `headers` come only from that new request — never the old, gone connection's. `connect` fires again, same as a fresh connection. Measured against a real client (the MCP SDK's `StreamableHTTPClientTransport`, which Claude Code embeds): it retries its dropped notification GET automatically, with the original session id and headers, for a couple of seconds before giving up — resurrection lets that retry reattach with no client-side change at all. See `README.md`'s restart-behaviour section.
+
 ## [0.8.0] - 2026-09-18
 ### Added
 - `thatch({ instructions })`: an optional string returned to every client at initialize as MCP server instructions (the SDK's `ServerOptions.instructions`). Clients such as Claude Code put it in the model's context, so a server can state its usage norms once for every caller. It's omitted from the initialize result when unset, so existing servers behave exactly as before.

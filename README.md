@@ -49,14 +49,60 @@ Pushing into a session can fail in ways the MCP SDK hides: a connection can be r
 
 ## API
 
-- `thatch({ tools?, auth?, path?, history?, serverInfo? })` → `{ plugin, mcp }`. Every client is accepted and assigned a UUID. Gate connections with `auth(req) => boolean` (default accepts all); it does not identify — an accepted client still gets a UUID and holds its headers.
+- `thatch({ tools?, auth?, path?, history?, serverInfo?, resurrectSessions? })` → `{ plugin, mcp }`. Every client is accepted and assigned a UUID. Gate connections with `auth(req) => boolean` (default accepts all); it does not identify — an accepted client still gets a UUID and holds its headers.
 - `instructions` (optional string) is returned to every client at initialize as MCP server instructions. Claude Code adds it to the model's context, so behaviour every caller should follow (for example, how to reply in chat) goes here once, not in each agent's setup.
 - `mcp.connections`: `list()`, `get(id)`, `has(id)`, `count()`, `find(pred)`, `filter(pred)`.
 - `mcp.send(id, frame)`, `mcp.sendMany(ids, frame)`, `mcp.sendAll(frame, { where? })`.
 - `mcp.on/once/off` for `connect` / `disconnect`. The disconnect reason is `closed`, `error`, or `stale`.
 - **Stale-session reaping** (`reap`, on by default): a client that dies without a DELETE never closes its transport, so thatch closes the session itself, emitting `disconnect` with reason `stale`. That happens once its notification stream has been down for `detachGraceMs` (default 60s) with no request since, or once a session that never opened a stream has had no requests for `idleMs` (default 10 min). An open stream or any request keeps a session alive, and a reaped client that returns gets 404, which is MCP's signal to re-initialize. Tune it with `thatch({ reap: { detachGraceMs, idleMs, intervalMs } })`, or turn it off with `reap: false`.
+- **Session resurrection** (`resurrectSessions`, off by default): see "Surviving a server restart" below.
 - A `Connection` carries `id`, `headers` (all of them), `connectedAt`, and methods `send(frame)` / `close()`. No built-in history, `lastSeenAt`, or readiness flag — subscribe to the `send` event and key it however you like; the `send` result tells you if a frame could not land.
 - `import { FakeConnection } from "@brooswit/thatch/testing"` for tests.
+
+## Surviving a server restart (LIBS-7)
+
+Every session id a thatch server has ever handed out lives only in that process. After a
+restart (or any redeploy that replaces the process), every one of those ids is unknown to
+the new process, and by default the new process answers `404 {"error":"unknown session"}`
+to any request that carries one — including the client's own background GET, the
+long-lived stream a channel push needs to land on. Per the MCP transport spec, a client
+that gets 404 is supposed to re-`initialize`, forgetting the old id. **Whether that actually
+happens automatically depends entirely on what the client does when the stream drops**,
+and here that's a mixed picture:
+
+- Claude Code's MCP client is the SDK's `StreamableHTTPClientTransport`. When its
+  standalone notification stream drops, it retries the same GET, with the same session id
+  and headers, using exponential backoff — by default twice, at roughly 1s and 1.5s later,
+  then it gives up silently. If the new process is already up and `resurrectSessions` is
+  on, one of those retries reattaches with **no client-side change at all** — no
+  re-initialize, no dropped push once reattached. If the restart takes longer than that
+  couple of seconds, the automatic retries are exhausted before the new process exists, and
+  the stream stays dead — until the client's next request of any kind, at which point
+  `resurrectSessions` still helps (see below).
+- Only a **request** (not the standalone GET stream reconnecting on its own) drives a full
+  client-side re-initialize. So without `resurrectSessions`, an otherwise-idle session's
+  channel is silently unreachable until the caller happens to use it for something else.
+
+`thatch({ resurrectSessions: true })` closes this gap from the server side: a request
+carrying an `mcp-session-id` thatch doesn't recognize re-creates a session under that exact
+id instead of 404ing, provided the `auth` hook accepts the new request (a rejection still
+answers 401, exactly as a fresh connect, and never resurrects). The resurrected
+connection's `headers` come only from the request that resurrected it — the old
+connection, whatever headers it held, is gone, so there's nothing to reuse or guess. This
+means:
+
+- A client whose automatic GET retry lands after the new process is up reattaches with no
+  re-initialize, as described above.
+- A client whose retries were exhausted first still recovers on its very next request
+  (rather than needing a full round-trip re-initialize first) — and that request also
+  re-opens its notification stream in the ordinary course of the client reconnecting.
+
+It's off by default because it works by marking a freshly-constructed SDK transport as
+already having completed its handshake under a caller-chosen id — a use of transport
+internals (`sessionId`, `_initialized`), not the transport's public API — pinned by a test
+(`test/unit/end-to-end.test.ts`, `describe("session resurrection (LIBS-7)")`) so an SDK
+upgrade that changes those internals fails loudly here rather than silently stop working in
+production.
 
 ## Legacy stdio discovery fallback
 

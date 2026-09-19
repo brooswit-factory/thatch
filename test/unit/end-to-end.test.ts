@@ -221,3 +221,85 @@ describe("stale-session reaping", () => {
     await stop();
   });
 });
+
+describe("session resurrection (LIBS-7)", () => {
+  const unknownId = "5f9c6f2e-0000-4000-8000-000000000000";
+  // A tool call (POST) rather than the standalone GET stream: a resurrected session's
+  // handling of it is identical either way, and unlike the GET stream — whose response
+  // is a bare, long-lived SSE body with nothing written until the first push or keepalive
+  // — a `tools/list` response completes right away, so `fetch()` resolves promptly.
+  const call = (base: string, id: string, headers: Record<string, string> = {}) => fetch(`${base}/mcp`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", "mcp-session-id": id, ...headers },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+  });
+
+  test("off by default: an unrecognized session id still 404s", async () => {
+    const { mcp, base, stop } = fresh();
+    const r = await call(base, unknownId);
+    expect(r.status).toBe(404);
+    await r.body?.cancel();
+    expect(mcp.connections.has(unknownId)).toBe(false);
+    await stop();
+  });
+
+  test("resurrectSessions: true re-creates a session under the SAME id, holding only the NEW request's headers", async () => {
+    const { mcp, base, stop } = fresh({ resurrectSessions: true });
+    const seen: string[] = [];
+    mcp.on("connect", (c) => seen.push(c.id));
+    const r = await call(base, unknownId, { "x-workspace": "epic/LIBS-7" });
+    expect(r.status).toBe(200);
+    await r.body?.cancel();
+    expect(mcp.connections.has(unknownId)).toBe(true);
+    const c = mcp.connections.get(unknownId)!;
+    expect(c.headers["x-workspace"]).toBe("epic/LIBS-7");
+    expect(c.headers["mcp-session-id"]).toBe(unknownId); // the resurrecting request's own headers, nothing carried over
+    expect(seen).toEqual([unknownId]); // connect fires again, as for a fresh connect
+    await stop();
+  });
+
+  test("auth rejecting the resurrecting request answers 401 and never resurrects", async () => {
+    const { mcp, base, stop } = fresh({ resurrectSessions: true, auth: (req) => req.headers.get("x-key") === "let-me-in" });
+    const r = await call(base, unknownId, { "x-key": "nope" });
+    expect(r.status).toBe(401);
+    await r.body?.cancel();
+    expect(mcp.connections.has(unknownId)).toBe(false);
+    const ok = await call(base, unknownId, { "x-key": "let-me-in" });
+    expect(ok.status).toBe(200);
+    await ok.body?.cancel();
+    expect(mcp.connections.has(unknownId)).toBe(true);
+    await stop();
+  });
+
+  // The regression this ticket is about: a client's automatic stream reconnect (the
+  // StreamableHTTPClientTransport's own GET retry, unmodified) must reattach across a
+  // full server restart — a brand-new thatch instance, same port, zero shared state —
+  // with NO `initialize` from the client. Without `resurrectSessions` this test fails:
+  // the retry lands on the new server and gets 404, same as the reap-then-404 test above.
+  // `app1.stop(true)` force-closes the old server's live sockets — a keep-alive connection
+  // left open (plain `.stop()`) would route the "retry" to the dead server's own listener,
+  // masking the very restart this test exists to simulate.
+  test("a client's stream survives a full server restart with no re-initialize", async () => {
+    const opts: Parameters<typeof thatch>[0] = { resurrectSessions: true, tools: { echo: { description: "echo", input: { text: z.string() }, handler: ({ text }) => text } } };
+    const { plugin: plugin1, mcp: mcp1 } = thatch(opts);
+    const app1 = new Elysia().use(plugin1).listen(0);
+    const port: number = app1.server!.port!;
+    const a = await ready(mcp1, `http://localhost:${port}`);
+    const id = a.sessionId!;
+    await mcp1.closeAll();
+    await app1.stop(true);
+
+    const { plugin, mcp: mcp2 } = thatch(opts);
+    const app2 = new Elysia().use(plugin).listen(port);
+    try {
+      const until = async (cond: () => boolean, ms = 5000) => { const end = Date.now() + ms; while (!cond() && Date.now() < end) await Bun.sleep(20); return cond(); };
+      expect(await until(() => mcp2.connections.has(id))).toBe(true); // the client's own GET retry reattached this
+      expect(mcp2.connections.get(id)!.id).toBe(id); // no re-initialize: the client never learned a new id
+      expect(await mcp2.send(id, { content: "welcome back", meta: {} })).toEqual({ claim: "C2" });
+      expect(await a.nextFrame()).toMatchObject({ content: "welcome back" });
+    } finally {
+      await mcp2.closeAll(); app2.stop();
+      await a.disconnect().catch(() => {});
+    }
+  });
+});
