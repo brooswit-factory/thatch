@@ -34,6 +34,15 @@ export class Session implements Pushable {
     connection: () => Connection;
     sessionId: string;
     onClose: () => void;
+    /**
+     * The request that created this session was NOT an `initialize` — it was a GET
+     * carrying an `mcp-session-id` thatch didn't recognize (see
+     * `McpOptions.resurrectSessions`) — so the transport will never run its own
+     * handshake to learn its id. Force it into the post-initialize state under
+     * `sessionId` directly. Relies on SDK-internal fields (`sessionId`, `_initialized`)
+     * rather than public API; pinned by a test.
+     */
+    resurrected?: boolean;
   }): Promise<Session> {
     const server = new McpServer(opts.serverInfo, {
       capabilities: { ...CHANNEL_CAPABILITY, tools: {} },
@@ -48,6 +57,11 @@ export class Session implements Pushable {
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: () => opts.sessionId });
     transport.onclose = opts.onClose;
     await server.connect(transport);
+    if (opts.resurrected) {
+      const t = transport as unknown as { sessionId?: string; _initialized: boolean };
+      t.sessionId = opts.sessionId;
+      t._initialized = true;
+    }
     return new Session(server, transport);
   }
 

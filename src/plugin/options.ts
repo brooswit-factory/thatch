@@ -35,6 +35,30 @@ export interface McpOptions {
    * session alive.
    */
   reap?: false | ReapOptions;
+  /**
+   * When a client's standalone notification stream (a GET) arrives carrying an
+   * `mcp-session-id` this server never issued (e.g. after a restart, when every id it
+   * had handed out is now unknown), re-create a session under that SAME id instead of
+   * answering 404 — so the SDK client's own automatic stream-reconnect retry reattaches
+   * with no re-`initialize`. The `auth` hook re-runs against the NEW request; a
+   * rejection answers 401, exactly as a fresh connect, and never resurrects. The
+   * resurrected connection's `headers` come from that new request only — the old
+   * connection (and its headers) are gone, so there is nothing to reuse.
+   *
+   * GET only, deliberately: the SDK client opens its standalone stream in exactly one
+   * place, right after `notifications/initialized`, and never reopens it off a plain
+   * POST/DELETE response. So a POST/DELETE under an unknown id still 404s even with
+   * this on — that's what makes the client re-`initialize` and open a fresh stream, the
+   * self-healing path this option leaves untouched for restarts that outlast the
+   * client's own stream-retry window (a couple of seconds, by default). Resurrecting a
+   * POST/DELETE too would "succeed" but leave the stream never reopened — a session
+   * registered yet permanently deaf, which is worse than today's 404.
+   *
+   * Off by default: it pokes at MCP SDK transport internals (marking a fresh transport
+   * pre-initialized under a caller-chosen id) rather than the public API, so opt in
+   * deliberately.
+   */
+  resurrectSessions?: boolean;
 }
 
 export interface ReapOptions {

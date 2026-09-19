@@ -49,14 +49,69 @@ Pushing into a session can fail in ways the MCP SDK hides: a connection can be r
 
 ## API
 
-- `thatch({ tools?, auth?, path?, history?, serverInfo? })` → `{ plugin, mcp }`. Every client is accepted and assigned a UUID. Gate connections with `auth(req) => boolean` (default accepts all); it does not identify — an accepted client still gets a UUID and holds its headers.
+- `thatch({ tools?, auth?, path?, history?, serverInfo?, resurrectSessions? })` → `{ plugin, mcp }`. Every client is accepted and assigned a UUID. Gate connections with `auth(req) => boolean` (default accepts all); it does not identify — an accepted client still gets a UUID and holds its headers.
 - `instructions` (optional string) is returned to every client at initialize as MCP server instructions. Claude Code adds it to the model's context, so behaviour every caller should follow (for example, how to reply in chat) goes here once, not in each agent's setup.
 - `mcp.connections`: `list()`, `get(id)`, `has(id)`, `count()`, `find(pred)`, `filter(pred)`.
 - `mcp.send(id, frame)`, `mcp.sendMany(ids, frame)`, `mcp.sendAll(frame, { where? })`.
 - `mcp.on/once/off` for `connect` / `disconnect`. The disconnect reason is `closed`, `error`, or `stale`.
 - **Stale-session reaping** (`reap`, on by default): a client that dies without a DELETE never closes its transport, so thatch closes the session itself, emitting `disconnect` with reason `stale`. That happens once its notification stream has been down for `detachGraceMs` (default 60s) with no request since, or once a session that never opened a stream has had no requests for `idleMs` (default 10 min). An open stream or any request keeps a session alive, and a reaped client that returns gets 404, which is MCP's signal to re-initialize. Tune it with `thatch({ reap: { detachGraceMs, idleMs, intervalMs } })`, or turn it off with `reap: false`.
+- **Session resurrection** (`resurrectSessions`, off by default): see "Surviving a server restart" below.
 - A `Connection` carries `id`, `headers` (all of them), `connectedAt`, and methods `send(frame)` / `close()`. No built-in history, `lastSeenAt`, or readiness flag — subscribe to the `send` event and key it however you like; the `send` result tells you if a frame could not land.
 - `import { FakeConnection } from "@brooswit/thatch/testing"` for tests.
+
+## Surviving a server restart (LIBS-7)
+
+Every session id a thatch server has ever handed out lives only in that process. After a
+restart (or any redeploy that replaces the process), every one of those ids is unknown to
+the new process, and by default the new process answers `404 {"error":"unknown session"}`
+to any request that carries one — including the client's own background GET, the
+long-lived stream a channel push needs to land on. Per the MCP transport spec, a client
+that gets 404 is supposed to re-`initialize`, forgetting the old id. **Whether that actually
+happens automatically depends entirely on what the client does when the stream drops**,
+and here that's a mixed picture:
+
+- Claude Code's MCP client is the SDK's `StreamableHTTPClientTransport`. When its
+  standalone notification stream drops, it retries the same GET, with the same session id
+  and headers, using exponential backoff — by default twice, at roughly 1s and 1.5s later,
+  then it gives up silently, for good. **It opens that stream in exactly one place**: right
+  after `notifications/initialized` gets a 202. A later successful request never reopens
+  it.
+- Only a **request** (not the standalone GET stream reconnecting on its own) drives a full
+  client-side re-initialize — which is what opens a fresh stream. So without
+  `resurrectSessions`, an otherwise-idle session's channel is silently unreachable until the
+  caller happens to use it for something else, at which point a 404 forces the client
+  through a full re-initialize and a fresh stream.
+
+`thatch({ resurrectSessions: true })` closes part of this gap from the server side — **for
+the standalone stream's GET reconnect only**: an unrecognized `mcp-session-id` on a GET
+re-creates a session under that exact id instead of 404ing, provided the `auth` hook
+accepts the new request (a rejection still answers 401, exactly as a fresh connect, and
+never resurrects). The resurrected connection's `headers` come only from the request that
+resurrected it — the old connection, whatever headers it held, is gone, so there's nothing
+to reuse or guess.
+
+**A POST or DELETE under an unrecognized id still 404s, even with this on.** That's
+deliberate, not an oversight: since the SDK client only ever reopens its stream right after
+its own `initialize` handshake, resurrecting a POST would make that request "succeed" with
+no re-initialize — and thus no stream ever reopens. The session would stay registered but
+permanently deaf, which is worse than today's 404. Only a GET is the client's own stream
+literally trying to come back; that's the one case resurrection can help without cutting
+off the client's self-healing path. So the net effect is:
+
+- A restart that completes within the client's own retry window (a couple of seconds, by
+  default): the GET retry reattaches with **no client-side change at all** — no
+  re-initialize, no dropped push once reattached.
+- A restart that takes longer: the GET retries are exhausted before the new process exists,
+  so the stream stays dead until the client's next request — which still 404s (POST/DELETE
+  aren't resurrected) and drives the same full re-initialize → fresh stream path that
+  exists today, with or without this option.
+
+It's off by default because even that narrower GET-only path works by marking a
+freshly-constructed SDK transport as already having completed its handshake under a
+caller-chosen id — a use of transport internals (`sessionId`, `_initialized`), not the
+transport's public API — pinned by a test (`test/unit/end-to-end.test.ts`,
+`describe("session resurrection (LIBS-7)")`) so an SDK upgrade that changes those internals
+fails loudly here rather than silently stop working in production.
 
 ## Legacy stdio discovery fallback
 
