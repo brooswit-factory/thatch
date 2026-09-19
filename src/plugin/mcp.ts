@@ -87,7 +87,14 @@ function build(o: McpOptions) {
     if (sid) {
       const entry = registry.entry(sid);
       if (entry) return entry.handle.handle(req);
-      if (!o.resurrectSessions) return new Response(JSON.stringify({ error: "unknown session" }), { status: 404, headers: { "content-type": "application/json" } });
+      // Resurrect only the standalone stream's own GET reconnect. The SDK client opens
+      // that stream in exactly one place — right after `notifications/initialized` — so a
+      // successful POST/DELETE under an unknown id never reopens it: past the client's own
+      // retry window (~2.5s by default), resurrecting a POST would leave the session
+      // registered but permanently deaf, worse than today's 404-forces-reinitialize. A GET
+      // reconnect that lands within the window is the case resurrection actually helps;
+      // outside it, falling through to 404 preserves today's self-healing re-initialize.
+      if (!o.resurrectSessions || req.method !== "GET") return new Response(JSON.stringify({ error: "unknown session" }), { status: 404, headers: { "content-type": "application/json" } });
       return connectSession(req, sid, true);
     }
     if (req.method !== "POST") return new Response("session required", { status: 400 });

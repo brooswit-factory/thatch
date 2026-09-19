@@ -35,11 +35,12 @@ export class Session implements Pushable {
     sessionId: string;
     onClose: () => void;
     /**
-     * The request that created this session was NOT an `initialize` (it carried an
-     * `mcp-session-id` thatch didn't recognize — see `McpOptions.resurrectSessions`),
-     * so the transport will never run its own handshake to learn its id. Force it into
-     * the post-initialize state under `sessionId` directly. Relies on SDK-internal
-     * fields (`sessionId`, `_initialized`) rather than public API; pinned by a test.
+     * The request that created this session was NOT an `initialize` — it was a GET
+     * carrying an `mcp-session-id` thatch didn't recognize (see
+     * `McpOptions.resurrectSessions`) — so the transport will never run its own
+     * handshake to learn its id. Force it into the post-initialize state under
+     * `sessionId` directly. Relies on SDK-internal fields (`sessionId`, `_initialized`)
+     * rather than public API; pinned by a test.
      */
     resurrected?: boolean;
   }): Promise<Session> {
