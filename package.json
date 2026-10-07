@@ -1,6 +1,6 @@
 {
   "name": "@brooswit/thatch",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Elysia plugin: a central HTTP MCP server with named connections and a channel for pushing messages into Claude Code sessions",
   "license": "MIT",
   "type": "module",

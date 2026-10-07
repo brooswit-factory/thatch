@@ -57,20 +57,16 @@ function build(o: McpOptions) {
   };
   function stopSweep() { if (sweep) { clearInterval(sweep); sweep = undefined; } }
 
-  async function fetchHandler(req: Request): Promise<Response> {
-    const sid = req.headers.get(SESSION_HEADER);
-    if (sid) {
-      const entry = registry.entry(sid);
-      if (!entry) return new Response(JSON.stringify({ error: "unknown session" }), { status: 404, headers: { "content-type": "application/json" } });
-      return entry.handle.handle(req);
-    }
-    if (req.method !== "POST") return new Response("session required", { status: 400 });
+  // Fresh connect (no sid: id is new, req must be the initialize POST) and resurrection
+  // (sid: a caller-chosen id thatch no longer recognizes) both land here. Either way the
+  // connection's headers come only from THIS request — a resurrection never inherits the
+  // headers of whatever session used to hold that id.
+  async function connectSession(req: Request, id: string, resurrected: boolean): Promise<Response> {
     if (!(await (o.auth ?? (() => true))(req))) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
-    const id = crypto.randomUUID();
     const headers: Record<string, string> = {};
     req.headers.forEach((v, k) => { headers[k] = v; });
     const session = await Session.open({
-      serverInfo, instructions: o.instructions, tools: o.tools ?? {}, sessionId: id,
+      serverInfo, instructions: o.instructions, tools: o.tools ?? {}, sessionId: id, resurrected,
       connection: () => registry.get(id)!,
       onClose: () => { void closeById(id); },
     });
@@ -84,6 +80,18 @@ function build(o: McpOptions) {
     sessions.set(id, session);
     startSweep();
     return session.handle(req);
+  }
+
+  async function fetchHandler(req: Request): Promise<Response> {
+    const sid = req.headers.get(SESSION_HEADER);
+    if (sid) {
+      const entry = registry.entry(sid);
+      if (entry) return entry.handle.handle(req);
+      if (!o.resurrectSessions) return new Response(JSON.stringify({ error: "unknown session" }), { status: 404, headers: { "content-type": "application/json" } });
+      return connectSession(req, sid, true);
+    }
+    if (req.method !== "POST") return new Response("session required", { status: 400 });
+    return connectSession(req, crypto.randomUUID(), false);
   }
 
   const handle: McpHandle = {
