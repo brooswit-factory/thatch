@@ -73,36 +73,45 @@ and here that's a mixed picture:
 - Claude Code's MCP client is the SDK's `StreamableHTTPClientTransport`. When its
   standalone notification stream drops, it retries the same GET, with the same session id
   and headers, using exponential backoff — by default twice, at roughly 1s and 1.5s later,
-  then it gives up silently. If the new process is already up and `resurrectSessions` is
-  on, one of those retries reattaches with **no client-side change at all** — no
-  re-initialize, no dropped push once reattached. If the restart takes longer than that
-  couple of seconds, the automatic retries are exhausted before the new process exists, and
-  the stream stays dead — until the client's next request of any kind, at which point
-  `resurrectSessions` still helps (see below).
+  then it gives up silently, for good. **It opens that stream in exactly one place**: right
+  after `notifications/initialized` gets a 202. A later successful request never reopens
+  it.
 - Only a **request** (not the standalone GET stream reconnecting on its own) drives a full
-  client-side re-initialize. So without `resurrectSessions`, an otherwise-idle session's
-  channel is silently unreachable until the caller happens to use it for something else.
+  client-side re-initialize — which is what opens a fresh stream. So without
+  `resurrectSessions`, an otherwise-idle session's channel is silently unreachable until the
+  caller happens to use it for something else, at which point a 404 forces the client
+  through a full re-initialize and a fresh stream.
 
-`thatch({ resurrectSessions: true })` closes this gap from the server side: a request
-carrying an `mcp-session-id` thatch doesn't recognize re-creates a session under that exact
-id instead of 404ing, provided the `auth` hook accepts the new request (a rejection still
-answers 401, exactly as a fresh connect, and never resurrects). The resurrected
-connection's `headers` come only from the request that resurrected it — the old
-connection, whatever headers it held, is gone, so there's nothing to reuse or guess. This
-means:
+`thatch({ resurrectSessions: true })` closes part of this gap from the server side — **for
+the standalone stream's GET reconnect only**: an unrecognized `mcp-session-id` on a GET
+re-creates a session under that exact id instead of 404ing, provided the `auth` hook
+accepts the new request (a rejection still answers 401, exactly as a fresh connect, and
+never resurrects). The resurrected connection's `headers` come only from the request that
+resurrected it — the old connection, whatever headers it held, is gone, so there's nothing
+to reuse or guess.
 
-- A client whose automatic GET retry lands after the new process is up reattaches with no
-  re-initialize, as described above.
-- A client whose retries were exhausted first still recovers on its very next request
-  (rather than needing a full round-trip re-initialize first) — and that request also
-  re-opens its notification stream in the ordinary course of the client reconnecting.
+**A POST or DELETE under an unrecognized id still 404s, even with this on.** That's
+deliberate, not an oversight: since the SDK client only ever reopens its stream right after
+its own `initialize` handshake, resurrecting a POST would make that request "succeed" with
+no re-initialize — and thus no stream ever reopens. The session would stay registered but
+permanently deaf, which is worse than today's 404. Only a GET is the client's own stream
+literally trying to come back; that's the one case resurrection can help without cutting
+off the client's self-healing path. So the net effect is:
 
-It's off by default because it works by marking a freshly-constructed SDK transport as
-already having completed its handshake under a caller-chosen id — a use of transport
-internals (`sessionId`, `_initialized`), not the transport's public API — pinned by a test
-(`test/unit/end-to-end.test.ts`, `describe("session resurrection (LIBS-7)")`) so an SDK
-upgrade that changes those internals fails loudly here rather than silently stop working in
-production.
+- A restart that completes within the client's own retry window (a couple of seconds, by
+  default): the GET retry reattaches with **no client-side change at all** — no
+  re-initialize, no dropped push once reattached.
+- A restart that takes longer: the GET retries are exhausted before the new process exists,
+  so the stream stays dead until the client's next request — which still 404s (POST/DELETE
+  aren't resurrected) and drives the same full re-initialize → fresh stream path that
+  exists today, with or without this option.
+
+It's off by default because even that narrower GET-only path works by marking a
+freshly-constructed SDK transport as already having completed its handshake under a
+caller-chosen id — a use of transport internals (`sessionId`, `_initialized`), not the
+transport's public API — pinned by a test (`test/unit/end-to-end.test.ts`,
+`describe("session resurrection (LIBS-7)")`) so an SDK upgrade that changes those internals
+fails loudly here rather than silently stop working in production.
 
 ## Legacy stdio discovery fallback
 

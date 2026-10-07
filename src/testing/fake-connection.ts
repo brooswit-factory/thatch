@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { StreamableHTTPClientTransport, type StreamableHTTPReconnectionOptions } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CHANNEL_METHOD } from "../protocol/method.js";
 import type { Frame } from "../protocol/frame.js";
 import { z } from "zod";
@@ -13,10 +13,10 @@ export class FakeConnection {
   private waiters: Array<(f: Frame) => void> = [];
   private constructor(readonly client: Client, private readonly transport: StreamableHTTPClientTransport) {}
 
-  static async connect(baseUrl: string | URL, opts: { path?: string; headers?: Record<string, string> } = {}) {
+  static async connect(baseUrl: string | URL, opts: { path?: string; headers?: Record<string, string>; reconnectionOptions?: StreamableHTTPReconnectionOptions } = {}) {
     const url = new URL(opts.path ?? "/mcp", baseUrl);
     const headers = { ...(opts.headers ?? {}) };
-    const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers } });
+    const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers }, ...(opts.reconnectionOptions ? { reconnectionOptions: opts.reconnectionOptions } : {}) });
     const client = new Client({ name: "fake-connection", version: "0" }, { capabilities: { experimental: { "claude/channel": {} } } });
     const fc = new FakeConnection(client, transport);
     client.setNotificationHandler(z.object({ method: z.literal(CHANNEL_METHOD), params: z.object({ content: z.string(), meta: z.record(z.string(), z.string()) }) }), (n) => {
